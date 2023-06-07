@@ -206,6 +206,77 @@ async function run() {
       res.send({ insertResult, deleteResult })
     })
 
+    app.get('/admin-stats', verifyJWT, verifyAdmin, async (req, res) =>{
+      const users = await usersCollection.estimatedDocumentCount();
+      const products = await  menuCollection.estimatedDocumentCount();
+      const orders = await paymentCollection.estimatedDocumentCount();
+
+      //Best way to get sum of the price field is to use group and sum operation
+
+      // await paymentCollection.aggregate([
+      //   {
+      //     $group: {
+      //       _id: null,
+      //       total: { $sum: '$price' }
+      //     }
+      //   }
+      // ]).toArray() 
+
+      const payments = await paymentCollection.find().toArray();
+      const revenue = payments.reduce((sum, payment) => sum + payment.price, 0)
+
+      res.send({
+        revenue,
+        users,
+        products,
+        orders
+      })
+    })
+/* 
+-------------------------------
+     Second best solution
+------------------------------
+1. Load all payments
+2. For each payment, get the menuItems array
+3. For each item in the menuItems array get the menuItem for the menu collection
+4. put them in an array: allOrderedItems
+5. separate allOrderItems by category using filter
+6. now get the quantity by using length: pizza.length
+7. for each category use reduce to get the total amount spent on the category
+*/ 
+    app.get('/order-stats', verifyJWT, verifyAdmin, async(req, res) =>{
+      const pipeline = [
+        {
+          $lookup: {
+            from: 'menu',
+            localField: 'menuItems',
+            foreignField: '_id',
+            as: 'menuItemsData'
+          }
+        },
+        {
+          $unwind: '$menuItemsData'
+        },
+        {
+          $group: {
+            _id: '$menuItemsData.category',
+            count: { $sum: 1 },
+            total: { $sum: '$menuItemsData.price' }
+          }
+        },
+        {
+          $project: {
+            category: '$_id',
+            count: 1,
+            total: { $round: ['$total', 2] },
+            _id: 0
+          }
+        }
+      ];
+      const result = await paymentCollection.aggregate(pipeline).toArray();
+      res.send(result);
+    })
+
     // Send ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
