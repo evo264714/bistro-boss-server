@@ -2,6 +2,8 @@ const express = require('express');
 const app = express();
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
+const mg = require('nodemailer-mailgun-transport');
 require('dotenv').config()
 const stripe = require('stripe')(process.env.PAYMENT_SECRET_KEY)
 const port = process.env.PORT || 5000;
@@ -9,6 +11,48 @@ const port = process.env.PORT || 5000;
 //Middleware
 app.use(cors())
 app.use(express.json())
+
+// let transporter = nodemailer.createTransport({
+//   host: 'smtp.sendgrid.net',
+//   port: 587,
+//   auth: {
+//     user: "apikey",
+//     pass: process.env.SENDGRID_API_KEY
+//   }
+// })
+
+const auth = {
+  auth: {
+    api_key: process.env.EMAIL_PRIVATE_KEY,
+    domain: process.env.EMAIL_DOMAIN
+  }
+}
+
+const transporter = nodemailer.createTransport(mg(auth));
+
+//Send payment confirmation email
+const sendPaymentConfirmationEmail = payment => {
+  transporter.sendMail({
+    from: "evotsutsuki@gmail.com", // verified sender email
+    to: "evotsutsuki@gmail.com", // recipient email
+    subject: "Your order is confirmed", // Subject line
+    text: "Hello world!", // plain text body
+    html: `
+      <div>
+        <h2>Payment Confirmed!</h2>
+        <p>Transaction ID: ${payment.transactionId}</p>
+        
+      </div>
+    `, // html body
+  }, function (error, info) {
+    if (error) {
+      console.log(error);
+    } else {
+      console.log('Email sent: ' + info.response);
+    }
+  });
+
+}
 
 const verifyJWT = (req, res, next) => {
   const authorization = req.headers.authorization;
@@ -202,13 +246,16 @@ async function run() {
       const query = { _id: { $in: payment.cartItems.map(id => new ObjectId(id)) } }
       const deleteResult = await cartCollection.deleteMany(query)
 
+      //Send an email confirming payment
+      sendPaymentConfirmationEmail(payment)
+
 
       res.send({ insertResult, deleteResult })
     })
 
-    app.get('/admin-stats', verifyJWT, verifyAdmin, async (req, res) =>{
+    app.get('/admin-stats', verifyJWT, verifyAdmin, async (req, res) => {
       const users = await usersCollection.estimatedDocumentCount();
-      const products = await  menuCollection.estimatedDocumentCount();
+      const products = await menuCollection.estimatedDocumentCount();
       const orders = await paymentCollection.estimatedDocumentCount();
 
       //Best way to get sum of the price field is to use group and sum operation
@@ -232,19 +279,19 @@ async function run() {
         orders
       })
     })
-/* 
--------------------------------
-     Second best solution
-------------------------------
-1. Load all payments
-2. For each payment, get the menuItems array
-3. For each item in the menuItems array get the menuItem for the menu collection
-4. put them in an array: allOrderedItems
-5. separate allOrderItems by category using filter
-6. now get the quantity by using length: pizza.length
-7. for each category use reduce to get the total amount spent on the category
-*/ 
-    app.get('/order-stats', verifyJWT, verifyAdmin, async(req, res) =>{
+    /* 
+    -------------------------------
+         Second best solution
+    ------------------------------
+    1. Load all payments
+    2. For each payment, get the menuItems array
+    3. For each item in the menuItems array get the menuItem for the menu collection
+    4. put them in an array: allOrderedItems
+    5. separate allOrderItems by category using filter
+    6. now get the quantity by using length: pizza.length
+    7. for each category use reduce to get the total amount spent on the category
+    */
+    app.get('/order-stats', verifyJWT, verifyAdmin, async (req, res) => {
       const pipeline = [
         {
           $lookup: {
